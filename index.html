@@ -17,7 +17,7 @@
     <div class="container">
         <div id="loader" class="loader"></div>
         <p id="status-text">正在為您接通電話，請稍候...</p>
-        <a id="fallback-link" href="tel:+886903573073" class="fallback-btn">若未自動撥出請點此，或請撥0903-573-073</a>
+        <a id="fallback-link" href="tel:+886903573073" class="fallback-btn">若未自動撥出，請點此撥號</a>
     </div>
 
     <script>
@@ -26,7 +26,6 @@
             PHONE_NUMBER: "tel:+886903573073"
         };
 
-        // 精準取得台北時間 (Asia/Taipei) 並格式化為 CASYYYYMMDDHHMM
         function generateTaipeiUserId() {
             try {
                 const now = new Date();
@@ -55,10 +54,17 @@
             try {
                 const formData = new URLSearchParams();
                 for (const key in data) { formData.append(key, data[key]); }
+                
                 if (navigator.sendBeacon) {
                     navigator.sendBeacon(CONFIG.N8N_URL, formData);
                 } else {
-                    fetch(CONFIG.N8N_URL, { method: 'POST', body: formData, mode: 'no-cors' }).catch(e => console.log(e));
+                    // 💡 加入 keepalive: true，確保瀏覽器在彈出撥號介面時，絕不中斷此請求
+                    fetch(CONFIG.N8N_URL, { 
+                        method: 'POST', 
+                        body: formData, 
+                        mode: 'no-cors',
+                        keepalive: true 
+                    }).catch(e => console.log(e));
                 }
             } catch (err) {
                 console.error("數據傳送失敗", err);
@@ -68,12 +74,16 @@
         async function triggerTrackingAndCall() {
             const params = new URLSearchParams(window.location.search);
             
-            // 擷取網址參數
-            const gclid = params.get('gclid') || "";
-            const gbraid = params.get('gbraid') || "";
-            const wbraid = params.get('wbraid') || "";
+            // 💡 雙重備份防線：優先讀取 URL 參數，若無則嘗試從 GitHub 端的 sessionStorage 撈取舊記憶
+            const gclid = params.get('gclid') || sessionStorage.getItem('git_phone_gclid') || "";
+            const gbraid = params.get('gbraid') || sessionStorage.getItem('git_phone_gbraid') || "";
+            const wbraid = params.get('wbraid') || sessionStorage.getItem('git_phone_wbraid') || "";
 
-            // 異步取得 IP 數據，但不阻礙撥號速度
+            // 存入 GitHub 獨立儲存區，防止頁面意外跳轉或重新整理時遺失數據
+            if (gclid) sessionStorage.setItem('git_phone_gclid', gclid);
+            if (gbraid) sessionStorage.setItem('git_phone_gbraid', gbraid);
+            if (wbraid) sessionStorage.setItem('git_phone_wbraid', wbraid);
+
             let userIp = "unknown";
             try {
                 const ipResponse = await Promise.race([
@@ -85,12 +95,10 @@
                 console.log("IP 取得超時，直接跳過以加速撥號");
             }
 
-            // 產生要求的特製 UserId
             const userId = generateTaipeiUserId();
 
-            // 打包所有數據
             const payload = {
-                lineUserId: userId,      // CAS開頭 + 台北時間 (例如: CAS202605291355)
+                lineUserId: userId,
                 lineName:   "電話直撥客源",
                 gclid:      gclid,
                 gbraid:     gbraid,
@@ -100,21 +108,18 @@
                 timestamp:  new Date().toISOString()
             };
 
-            // 1. 發送追蹤數據給 n8n
             send(payload);
 
-            // 2. 延遲 50 毫秒確保瀏覽器執行發送後，立刻喚起撥號畫面
+            // 增加到 100 毫秒的安全發送緩衝時間，再喚起手機撥號
             setTimeout(() => {
                 window.location.href = CONFIG.PHONE_NUMBER;
                 
-                // 顯示備用按鈕，防止部分特殊瀏覽器攔截自動撥號
                 document.getElementById('loader').style.display = 'none';
                 document.getElementById('status-text').innerText = "已為您喚起電話撥打介面。";
                 document.getElementById('fallback-link').style.display = 'inline-block';
-            }, 50);
+            }, 100);
         }
 
-        // 頁面載入完成後直接執行
         window.addEventListener('DOMContentLoaded', triggerTrackingAndCall);
     </script>
 </body>
